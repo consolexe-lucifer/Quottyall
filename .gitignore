@@ -1,0 +1,14 @@
+# Build output
+/target
+/dist
+
+# Quotty's own log, written next to the exe
+quotty-debug.log
+*.log
+
+# Local probe dumps (they contain live account figures)
+/docs/fixtures/*.json
+
+# Never commit a key, even by accident
+*.key
+*.key.tmp

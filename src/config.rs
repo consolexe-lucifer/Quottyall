@@ -1,9 +1,37 @@
-//! Persistent Quotty settings, stored in %APPDATA%\Quotty\settings.json.
+//! Persistent Quottyall settings, stored in %APPDATA%\Quottyall\settings.json.
+//!
+//! The directory is the fork's own, not `%APPDATA%\Quotty`: an installed
+//! original Quotty keeps its settings untouched, and in particular never tries
+//! to parse a `family` value it does not know (`MiniMax`/`DeepSeek`), which
+//! would make it fall back to defaults and lose the user's preferences.
 
 use crate::providers::Family;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+
+/// Per-user application directory. Shared by the settings file, the DPAPI key
+/// store and the DeepSeek baselines.
+const APP_DIR: &str = "Quottyall";
+
+/// Whether the MiniMax key is expected at the mainland-China platform. Kept in
+/// a static because the provider runs on the poll thread, which must not read
+/// `settings.json` once per poll just to learn the region.
+static MINIMAX_CN: AtomicBool = AtomicBool::new(false);
+
+/// Region the MiniMax fetch tries first: `"global"` or `"cn"`.
+pub fn minimax_region() -> &'static str {
+    if MINIMAX_CN.load(Ordering::Relaxed) {
+        "cn"
+    } else {
+        "global"
+    }
+}
+
+pub fn set_minimax_region(region: &str) {
+    MINIMAX_CN.store(region.eq_ignore_ascii_case("cn"), Ordering::Relaxed);
+}
 
 /// What the strip's header line shows.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +100,17 @@ pub struct Settings {
     pub claude_enabled: bool,
     pub codex_enabled: bool,
     pub antigravity_enabled: bool,
+    pub minimax_enabled: bool,
+    pub deepseek_enabled: bool,
+    /// Keep this family on the strip whatever the foreground window is.
+    /// MiniMax and DeepSeek have no desktop app for the auto mode to
+    /// recognise, so this is how their strip gets on screen: pinned manually,
+    /// independent of the active application.
+    pub pinned_family: Option<Family>,
+    /// Which MiniMax platform the key belongs to: "global" (minimax.io) or
+    /// "cn" (api.minimaxi.com). Keys are region-bound; the fetch falls back to
+    /// the other host once before giving up.
+    pub minimax_region: String,
     pub active_mode: ActiveMode,
     /// Pinned family, and the one restored at startup.
     pub family: Family,
@@ -94,6 +133,12 @@ impl Default for Settings {
             claude_enabled: true,
             codex_enabled: true,
             antigravity_enabled: true,
+            // Off until a key is entered: an enabled source that cannot fetch
+            // would otherwise report "ключ не задан" on first start.
+            minimax_enabled: false,
+            deepseek_enabled: false,
+            pinned_family: None,
+            minimax_region: "global".into(),
             active_mode: ActiveMode::Auto,
             family: Family::Claude,
             diagnostics: false,
@@ -122,11 +167,26 @@ fn candidate_paths() -> Vec<PathBuf> {
     dirs_list.dedup();
     dirs_list
         .into_iter()
-        .map(|d| d.join("Quotty").join("settings.json"))
+        .map(|d| d.join(APP_DIR).join("settings.json"))
         .collect()
 }
 
 impl Settings {
+    /// Directory holding `settings.json` and `minimax.key`. Resolved from the
+    /// settings file when one exists, so the encrypted key always sits next to
+    /// the settings that describe it.
+    pub(crate) fn data_dir() -> Option<PathBuf> {
+        if let Some(p) = Self::path() {
+            if let Some(dir) = p.parent() {
+                return Some(dir.to_path_buf());
+            }
+        }
+        candidate_paths()
+            .into_iter()
+            .next()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    }
+
     /// Resolved once: an existing file wins wherever it is, so load and save
     /// can never end up on different paths.
     fn path() -> Option<PathBuf> {
@@ -161,6 +221,13 @@ impl Settings {
                 Ok(parsed) => parsed,
                 Err(e) => {
                     crate::providers::dbg_log(&format!("settings: {path:?} unparseable: {e}"));
+                    // Keep the unreadable file instead of letting the next save
+                    // silently overwrite settings this build cannot read (a
+                    // newer version's file, or a hand-edited one).
+                    if let Some(p) = &path {
+                        let backup = p.with_extension("json.broken");
+                        let _ = std::fs::copy(p, backup);
+                    }
                     Settings::default()
                 }
             },
@@ -170,16 +237,23 @@ impl Settings {
             s.poll_secs = 15;
         }
         // Never leave the user with nothing to show.
-        if !(s.claude_enabled || s.codex_enabled || s.antigravity_enabled) {
+        if s.enabled_mask() == 0 {
             s.claude_enabled = true;
         }
         if !s.enabled(s.family) {
             s.family = s.first_enabled();
         }
+        // A pin on a switched-off source would leave an empty strip; the pin
+        // only means something while its provider is enabled.
+        if s.pinned_family.is_some_and(|f| !s.enabled(f)) {
+            s.pinned_family = None;
+        }
+        set_minimax_region(&s.minimax_region);
         s
     }
 
     pub fn save(&self) {
+        set_minimax_region(&self.minimax_region);
         if let Some(p) = Self::path() {
             if let Some(dir) = p.parent() {
                 let _ = std::fs::create_dir_all(dir);
@@ -195,6 +269,8 @@ impl Settings {
             Family::Claude => self.claude_enabled,
             Family::Codex => self.codex_enabled,
             Family::Antigravity => self.antigravity_enabled,
+            Family::MiniMax => self.minimax_enabled,
+            Family::DeepSeek => self.deepseek_enabled,
         }
     }
 
@@ -203,10 +279,15 @@ impl Settings {
             Family::Claude => self.claude_enabled = on,
             Family::Codex => self.codex_enabled = on,
             Family::Antigravity => self.antigravity_enabled = on,
+            Family::MiniMax => self.minimax_enabled = on,
+            Family::DeepSeek => self.deepseek_enabled = on,
         }
-        if !(self.claude_enabled || self.codex_enabled || self.antigravity_enabled) {
+        if self.enabled_mask() == 0 {
             // Refuse to turn the last one off.
             self.set_enabled(f, true);
+        }
+        if self.pinned_family == Some(f) && !on {
+            self.pinned_family = None;
         }
         if !self.enabled(self.family) {
             self.family = self.first_enabled();

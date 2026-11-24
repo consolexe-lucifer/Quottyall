@@ -39,7 +39,7 @@ mod imp {
 
             let menu = Menu::new();
 
-            let header = MenuItem::new("Quotty", false, None);
+            let header = MenuItem::new("Quottyall", false, None);
             let autostart_item = CheckMenuItem::new("Автозапуск (ярлык)", true, autostart_on, None);
             let settings = MenuItem::new("Настройки…", true, None);
             let refresh = MenuItem::new("Обновить сейчас", true, None);
@@ -56,7 +56,7 @@ mod imp {
             ]);
 
             let tray = TrayIconBuilder::new()
-                .with_tooltip("Quotty")
+                .with_tooltip("Quottyall")
                 .with_icon(ic)
                 .with_menu(Box::new(menu))
                 .build()
@@ -131,7 +131,7 @@ mod imp {
         }
 
         fn title(&self) -> String {
-            "Quotty".into()
+            "Quottyall".into()
         }
 
         fn icon_pixmap(&self) -> Vec<ksni::Icon> {
@@ -160,7 +160,7 @@ mod imp {
         fn menu(&self) -> Vec<MenuItem<Self>> {
             vec![
                 MenuItem::Standard(StandardItem {
-                    label: "Quotty".into(),
+                    label: "Quottyall".into(),
                     enabled: false,
                     ..Default::default()
                 }),
@@ -203,7 +203,7 @@ mod imp {
             let (tx, rx) = channel();
             let handle = Sni {
                 autostart: autostart_on,
-                tooltip: "Quotty".into(),
+                tooltip: "Quottyall".into(),
                 tx,
                 wake,
             }

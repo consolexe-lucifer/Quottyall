@@ -1,8 +1,8 @@
 1 ICON "assets/quotty.ico"
 
 1 VERSIONINFO
-FILEVERSION 1,5,1,0
-PRODUCTVERSION 1,5,1,0
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
 FILEOS 0x4
 FILETYPE 0x1
 {
@@ -10,14 +10,14 @@ FILETYPE 0x1
   {
     BLOCK "040904B0"
     {
-      VALUE "CompanyName", "Brent"
-      VALUE "FileDescription", "Quotty - AI quota strip"
-      VALUE "FileVersion", "1.5.1.0"
-      VALUE "InternalName", "quotty"
-      VALUE "OriginalFilename", "quotty.exe"
-      VALUE "ProductName", "Quotty"
-      VALUE "ProductVersion", "1.5.1"
-      VALUE "LegalCopyright", "Brent"
+      VALUE "CompanyName", "Brent (original Quotty); consolexe-lucifer (fork)"
+      VALUE "FileDescription", "Quottyall - AI quota strip (fork of Quotty)"
+      VALUE "FileVersion", "1.0.0.0"
+      VALUE "InternalName", "quottyall"
+      VALUE "OriginalFilename", "quottyall.exe"
+      VALUE "ProductName", "Quottyall"
+      VALUE "ProductVersion", "1.0.0"
+      VALUE "LegalCopyright", "Brent (GPL-3.0); fork additions by consolexe-lucifer"
     }
   }
   BLOCK "VarFileInfo"

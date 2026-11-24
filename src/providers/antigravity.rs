@@ -722,7 +722,12 @@ mod tests {
         let titles: Vec<&str> = limits.iter().map(|l| l.title.as_str()).collect();
         assert_eq!(
             titles,
-            ["Gemini · 5h", "Gemini · 7d", "G. Argon · 7d", "Claude / GPT · 7d"]
+            [
+                "Gemini · 5h",
+                "Gemini · 7d",
+                "G. Argon · 7d",
+                "Claude / GPT · 7d"
+            ]
         );
         assert!((limits[2].used_percent - 30.0).abs() < 0.01);
     }
