@@ -124,8 +124,6 @@ powershell -ExecutionPolicy Bypass -File tools\probe-providers.ps1
 🙋 **Группа в Телеграм:** [@nova_txt](https://t.me/nova_txt) — вопросы, новости,
 поддержка.
 
-☕ **[Отблагодарить](https://nova-app.eu/donate)** — если Quotty оказался полезным.
-Это необязательный способ сказать "спасибо".
 
 ---
 
