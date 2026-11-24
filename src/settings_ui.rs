@@ -21,7 +21,10 @@ const DIM: Color32 = Color32::from_rgb(176, 184, 200);
 const HINT: Color32 = Color32::from_rgb(158, 167, 184);
 const WARN: Color32 = Color32::from_rgb(238, 162, 92);
 
-const WIN_W: f32 = 430.0;
+const WIN_W: f32 = 570.0;
+/// Room kept free on the right of the scrolling content for the scrollbar: it
+/// overlays the right edge, and text/buttons touching it look clipped.
+const SCROLLBAR_GAP: f32 = 14.0;
 const WIN_TITLE: &str = "Quottyall — настройки";
 const AUTHOR_URL: &str = "https://t.me/nova_txt";
 
@@ -177,6 +180,10 @@ impl App {
                             egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded,
                         )
                         .show(ui, |ui| {
+                            // Narrow the content by the scrollbar's width so no
+                            // text or button ends up underneath it.
+                            let content_w = (ui.available_width() - SCROLLBAR_GAP).max(220.0);
+                            ui.set_max_width(content_w);
                             self.appearance_card(ui);
                             self.sources_card(ui);
                             self.keys_card(ui);
@@ -410,7 +417,10 @@ impl App {
 
             ui.add_space(4.0);
             caption(ui, "Что показывать на строке");
-            ui.horizontal(|ui| {
+            // Wrapped, not plain horizontal: all six choices share one row on a
+            // normal window, and fall to a second line only when the window
+            // (or a high DPI scale) leaves too little room.
+            ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 5.0;
                 let auto = self.settings.active_mode == ActiveMode::Auto;
                 if ui.selectable_label(auto, "Активный").clicked() {
@@ -469,13 +479,16 @@ impl App {
                     ui.label(RichText::new(text).size(11.0).color(col));
                 });
             });
-            ui.label(
-                RichText::new(
-                    "Ключ из Plan Details на platform.minimax.io. Нужен ключ подписки M Plan, \
-                     не pay-as-you-go.",
+            ui.add(
+                egui::Label::new(
+                    RichText::new(
+                        "Ключ из Plan Details на platform.minimax.io. Нужен ключ подписки M Plan, \
+                         не pay-as-you-go.",
+                    )
+                    .size(10.5)
+                    .color(HINT),
                 )
-                .size(10.5)
-                .color(HINT),
+                .wrap(),
             );
 
             let mm_saved = self.minimax_key_hint.is_some();
@@ -569,10 +582,15 @@ impl App {
                     ui.label(RichText::new(text).size(11.0).color(col));
                 });
             });
-            ui.label(
-                RichText::new("Ключ с platform.deepseek.com. Показывает баланс, а не окна квоты.")
+            ui.add(
+                egui::Label::new(
+                    RichText::new(
+                        "Ключ с platform.deepseek.com. Показывает баланс, а не окна квоты.",
+                    )
                     .size(10.5)
                     .color(HINT),
+                )
+                .wrap(),
             );
 
             let ds_saved = self.deepseek_key_hint.is_some();
@@ -630,13 +648,16 @@ impl App {
                 (None, None) => "База появится после первого успешного опроса".to_string(),
             };
             ui.label(RichText::new(base_text).size(10.5).color(HINT));
-            ui.label(
-                RichText::new(
-                    "Процент — израсходованная доля этой базы, а не лимит DeepSeek: у API \
-                     расчёт деньгами. При пополнении база поднимается автоматически.",
+            ui.add(
+                egui::Label::new(
+                    RichText::new(
+                        "Процент — израсходованная доля этой базы, а не лимит DeepSeek: у API \
+                         расчёт деньгами. При пополнении база поднимается автоматически.",
+                    )
+                    .size(10.5)
+                    .color(HINT),
                 )
-                .size(10.5)
-                .color(HINT),
+                .wrap(),
             );
             if ui.button("Пересчитать базу от текущего баланса").clicked()
             {
@@ -987,8 +1008,14 @@ fn center_window(hwnd: isize, area: Option<(i32, i32, i32, i32)>) -> bool {
         if GetWindowRect(hwnd, &mut win).is_err() {
             return false;
         }
-        let x = left + ((right - left) - (win.right - win.left)) / 2;
-        let y = top + ((bottom - top) - (win.bottom - win.top)) / 2;
+        let width = win.right - win.left;
+        let height = win.bottom - win.top;
+        // Clamp inside the work area: a wide window on a small or high-DPI
+        // screen must still leave its title bar and Close button reachable.
+        let max_x = (right - width).max(left);
+        let max_y = (bottom - height).max(top);
+        let x = (left + ((right - left) - width) / 2).clamp(left, max_x);
+        let y = (top + ((bottom - top) - height) / 2).clamp(top, max_y);
         SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE).is_ok()
     }
 }

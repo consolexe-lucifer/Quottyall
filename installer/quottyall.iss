@@ -3,9 +3,9 @@
 ; build can be installed beside the original Quotty instead of replacing it.
 ; Built by tools\build-installer-fork.ps1, which passes the version from
 ; Cargo.toml:
-;   ISCC.exe /DAppVersion=1.5.1 installer\quottyall.iss
+;   ISCC.exe /DAppVersion=1.0.1 installer\quottyall.iss
 #ifndef AppVersion
-  #define AppVersion "1.0.0"
+  #define AppVersion "1.0.1"
 #endif
 #define AppName "Quottyall"
 #define AppPublisher "consolexe-lucifer (fork of Quotty by Brent)"
