@@ -7,6 +7,8 @@
 pub mod antigravity;
 pub mod claude;
 pub mod codex;
+pub mod deepseek;
+pub mod minimax;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -18,10 +20,22 @@ pub enum Family {
     Claude,
     Codex,
     Antigravity,
+    /// MiniMax M Plan. Unlike the other three this one has no local app to
+    /// watch: the key is entered in the settings and quoted from MiniMax's own
+    /// quota endpoint.
+    MiniMax,
+    /// DeepSeek's open platform: a prepaid money balance, not a quota window.
+    DeepSeek,
 }
 
 impl Family {
-    pub const ALL: [Family; 3] = [Family::Claude, Family::Codex, Family::Antigravity];
+    pub const ALL: [Family; 5] = [
+        Family::Claude,
+        Family::Codex,
+        Family::Antigravity,
+        Family::MiniMax,
+        Family::DeepSeek,
+    ];
 
     /// Stable index, used for the per-family arrays and the enabled-bitmask.
     pub fn idx(self) -> usize {
@@ -29,6 +43,8 @@ impl Family {
             Family::Claude => 0,
             Family::Codex => 1,
             Family::Antigravity => 2,
+            Family::MiniMax => 3,
+            Family::DeepSeek => 4,
         }
     }
 
@@ -38,6 +54,8 @@ impl Family {
             Family::Claude => "Claude",
             Family::Codex => "Codex",
             Family::Antigravity => "Antigravity",
+            Family::MiniMax => "MiniMax",
+            Family::DeepSeek => "DeepSeek",
         }
     }
 }
@@ -147,6 +165,8 @@ pub fn fetch(family: Family) -> Result<Snapshot, FetchError> {
         Family::Claude => claude::fetch(),
         Family::Codex => codex::fetch(),
         Family::Antigravity => antigravity::fetch(),
+        Family::MiniMax => minimax::fetch(),
+        Family::DeepSeek => deepseek::fetch(),
     }
 }
 
@@ -324,7 +344,38 @@ pub fn scrub(msg: &str) -> String {
     for marker in ["sk-ant-", "ya29.", "rt.1.", "eyJ"] {
         out = mask_after(&out, marker);
     }
-    out
+    // Last line of defence for credentials whose format we do not know (the
+    // MiniMax subscription key among them): whatever follows a bearer prefix
+    // is a secret, so it never reaches the log intact.
+    mask_bearer(&out)
+}
+
+/// Replace the token after `Bearer ` (or `bearer `) with a marker, keeping a
+/// four-character tail so two keys are still distinguishable in one file.
+fn mask_bearer(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    loop {
+        let lower = rest.to_ascii_lowercase();
+        let Some(at) = lower.find("bearer ") else {
+            out.push_str(rest);
+            return out;
+        };
+        let (head, tail) = rest.split_at(at + "bearer ".len());
+        out.push_str(head);
+        let token_len = tail
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'))
+            .unwrap_or(tail.len());
+        let token = &tail[..token_len];
+        if token.is_empty() {
+            out.push_str(tail);
+            return out;
+        }
+        let tail_start = token.len().saturating_sub(4);
+        out.push_str("…");
+        out.push_str(&token[tail_start..]);
+        rest = &tail[token_len..];
+    }
 }
 
 /// Keep `marker` plus six characters, drop the rest of the secret.
@@ -372,6 +423,13 @@ mod tests {
         assert!(out.starts_with("token sk-ant-oat01-…"), "{out}");
         assert!(!out.contains("ABCDEF"), "{out}");
         assert!(out.ends_with(" failed"), "{out}");
+    }
+
+    #[test]
+    fn bearer_credentials_are_masked() {
+        let out = scrub("minimax: Authorization: Bearer abcdef0123456789 sent");
+        assert!(!out.contains("abcdef0123456789"), "{out}");
+        assert!(out.ends_with("6789 sent"), "{out}");
     }
 
     #[test]

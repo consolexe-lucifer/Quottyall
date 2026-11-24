@@ -878,7 +878,9 @@ mod tests {
     #[test]
     #[ignore]
     fn probe_ratelimit_headers() {
-        let mut toks = super::load_tokens().map_err(|e| println!("desktop: {e}")).unwrap_or_default();
+        let mut toks = super::load_tokens()
+            .map_err(|e| println!("desktop: {e}"))
+            .unwrap_or_default();
         toks.extend(super::code_token());
         for tok in &toks {
             for (path, body) in [

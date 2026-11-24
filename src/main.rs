@@ -6,6 +6,7 @@ mod app;
 mod config;
 mod icon;
 mod providers;
+mod secret;
 mod settings_ui;
 mod shortcuts;
 mod tray;
@@ -38,7 +39,7 @@ fn main() -> eframe::Result<()> {
     };
 
     eframe::run_native(
-        "Quotty",
+        "Quottyall",
         options,
         Box::new(move |cc| Ok(Box::new(app::App::new(cc, settings)))),
     )

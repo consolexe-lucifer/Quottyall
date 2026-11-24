@@ -4,6 +4,7 @@
 use crate::app::App;
 use crate::config::{ActiveMode, Anchor, HeaderMode, StripSize};
 use crate::providers::Family;
+use crate::secret;
 use crate::shortcuts;
 
 use eframe::egui;
@@ -21,7 +22,7 @@ const HINT: Color32 = Color32::from_rgb(158, 167, 184);
 const WARN: Color32 = Color32::from_rgb(238, 162, 92);
 
 const WIN_W: f32 = 430.0;
-const WIN_TITLE: &str = "Quotty — настройки";
+const WIN_TITLE: &str = "Quottyall — настройки";
 const AUTHOR_URL: &str = "https://t.me/nova_txt";
 
 /// Windows' own UI face, in the weight the strip is drawn in. It is read from
@@ -178,6 +179,7 @@ impl App {
                         .show(ui, |ui| {
                             self.appearance_card(ui);
                             self.sources_card(ui);
+                            self.keys_card(ui);
                             refresh_now |= self.polling_card(ui);
                             self.system_card(ui);
                             check_update |= self.version_card(ui);
@@ -257,7 +259,7 @@ impl App {
         }
 
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Quotty").size(14.5).strong().color(TEXT));
+            ui.label(RichText::new("Quottyall").size(14.5).strong().color(TEXT));
             ui.label(RichText::new("· настройки").size(11.5).color(DIM));
             // Author credit sits on the same line, just left of the ✕.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -437,6 +439,239 @@ impl App {
         });
     }
 
+    /// Fake provider section: the two cloud APIs, whose keys the user has to
+    /// enter here, and the manual pin that keeps one of them on the strip.
+    ///
+    /// Neither key is written to `settings.json`: `secret::save` seals it with
+    /// Windows DPAPI under the current user, and the field only ever holds what
+    /// is being typed right now.
+    fn keys_card(&mut self, ui: &mut egui::Ui) {
+        let (mm_online, mm_ever, mm_err) = {
+            let st = self.shared.states.lock().unwrap();
+            let s = &st[Family::MiniMax.idx()];
+            (s.online, s.ever, s.error.clone())
+        };
+        let (ds_online, ds_ever, ds_err) = {
+            let st = self.shared.states.lock().unwrap();
+            let s = &st[Family::DeepSeek.idx()];
+            (s.online, s.ever, s.error.clone())
+        };
+        let baselines = crate::providers::deepseek::baselines();
+        let secure = secret::supported();
+
+        card(ui, "КЛЮЧИ ДОСТУПА", |ui| {
+            // ---------------------------------------------------- MiniMax ----
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("MiniMax M Plan (Go)").size(12.0).color(TEXT));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let (text, col) =
+                        source_status(self.settings.minimax_enabled, mm_online, mm_ever, &mm_err);
+                    ui.label(RichText::new(text).size(11.0).color(col));
+                });
+            });
+            ui.label(
+                RichText::new(
+                    "Ключ из Plan Details на platform.minimax.io. Нужен ключ подписки M Plan, \
+                     не pay-as-you-go.",
+                )
+                .size(10.5)
+                .color(HINT),
+            );
+
+            let mm_saved = self.minimax_key_hint.is_some();
+            ui.add(
+                egui::TextEdit::singleline(&mut self.minimax_key_input)
+                    .password(true)
+                    .hint_text(match &self.minimax_key_hint {
+                        Some(h) => format!("сохранён ····{h} — введите новый, чтобы заменить"),
+                        None => "M Plan API key".to_string(),
+                    })
+                    .desired_width(f32::INFINITY),
+            );
+            let (mut save_mm, mut clear_mm) = (false, false);
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(secure, |ui| {
+                    save_mm = ui.button("Сохранить ключ").clicked();
+                });
+                if mm_saved && ui.button("Удалить").clicked() {
+                    clear_mm = true;
+                }
+                if !secure {
+                    ui.label(RichText::new("только Windows").size(10.5).color(WARN));
+                }
+            });
+            if save_mm {
+                match secret::save(secret::Slot::MINIMAX, &self.minimax_key_input) {
+                    Ok(()) => {
+                        self.minimax_key_hint = secret::hint(secret::Slot::MINIMAX);
+                        self.minimax_key_input.clear();
+                        self.key_notice = Some((
+                            "Ключ MiniMax сохранён и зашифрован Windows.".to_string(),
+                            true,
+                        ));
+                        if !self.settings.minimax_enabled {
+                            self.settings.set_enabled(Family::MiniMax, true);
+                            self.settings.save();
+                        }
+                        self.shared
+                            .want
+                            .store(Family::MiniMax.idx() as u8, Ordering::Relaxed);
+                    }
+                    Err(e) => self.key_notice = Some((e, false)),
+                }
+            }
+            if clear_mm {
+                if secret::clear(secret::Slot::MINIMAX).is_ok() {
+                    self.minimax_key_hint = None;
+                    self.key_notice = Some(("Ключ MiniMax удалён.".to_string(), true));
+                }
+            }
+
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Регион").size(11.0).color(DIM));
+                let mut region = self.settings.minimax_region.clone();
+                if ui.selectable_label(region != "cn", "Global").clicked() {
+                    region = "global".to_string();
+                }
+                if ui.selectable_label(region == "cn", "Китай").clicked() {
+                    region = "cn".to_string();
+                }
+                if region != self.settings.minimax_region {
+                    self.settings.minimax_region = region;
+                    self.settings.save();
+                    self.shared
+                        .want
+                        .store(Family::MiniMax.idx() as u8, Ordering::Relaxed);
+                }
+            });
+            let mut pin_mm = self.settings.pinned_family == Some(Family::MiniMax);
+            if ui
+                .checkbox(&mut pin_mm, "Закрепить MiniMax на строке")
+                .changed()
+            {
+                self.settings.pinned_family = pin_mm.then_some(Family::MiniMax);
+                self.settings.save();
+                if pin_mm {
+                    self.active = Family::MiniMax;
+                }
+            }
+
+            ui.add_space(10.0);
+            ui.label(RichText::new("─".repeat(70)).size(8.0).color(CARD_HI));
+            ui.add_space(6.0);
+
+            // ---------------------------------------------------- DeepSeek ---
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("DeepSeek API").size(12.0).color(TEXT));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let (text, col) =
+                        source_status(self.settings.deepseek_enabled, ds_online, ds_ever, &ds_err);
+                    ui.label(RichText::new(text).size(11.0).color(col));
+                });
+            });
+            ui.label(
+                RichText::new("Ключ с platform.deepseek.com. Показывает баланс, а не окна квоты.")
+                    .size(10.5)
+                    .color(HINT),
+            );
+
+            let ds_saved = self.deepseek_key_hint.is_some();
+            ui.add(
+                egui::TextEdit::singleline(&mut self.deepseek_key_input)
+                    .password(true)
+                    .hint_text(match &self.deepseek_key_hint {
+                        Some(h) => format!("сохранён ····{h} — введите новый, чтобы заменить"),
+                        None => "DeepSeek API key".to_string(),
+                    })
+                    .desired_width(f32::INFINITY),
+            );
+            let (mut save_ds, mut clear_ds) = (false, false);
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(secure, |ui| {
+                    save_ds = ui.button("Сохранить ключ").clicked();
+                });
+                if ds_saved && ui.button("Удалить").clicked() {
+                    clear_ds = true;
+                }
+            });
+            if save_ds {
+                match secret::save(secret::Slot::DEEPSEEK, &self.deepseek_key_input) {
+                    Ok(()) => {
+                        self.deepseek_key_hint = secret::hint(secret::Slot::DEEPSEEK);
+                        self.deepseek_key_input.clear();
+                        self.key_notice = Some((
+                            "Ключ DeepSeek сохранён и зашифрован Windows.".to_string(),
+                            true,
+                        ));
+                        if !self.settings.deepseek_enabled {
+                            self.settings.set_enabled(Family::DeepSeek, true);
+                            self.settings.save();
+                        }
+                        self.shared
+                            .want
+                            .store(Family::DeepSeek.idx() as u8, Ordering::Relaxed);
+                    }
+                    Err(e) => self.key_notice = Some((e, false)),
+                }
+            }
+            if clear_ds {
+                if secret::clear(secret::Slot::DEEPSEEK).is_ok() {
+                    self.deepseek_key_hint = None;
+                    self.key_notice = Some(("Ключ DeepSeek удалён.".to_string(), true));
+                }
+            }
+
+            let (base_cny, base_usd) =
+                (baselines.get("CNY").copied(), baselines.get("USD").copied());
+            let base_text = match (base_cny, base_usd) {
+                (Some(c), Some(u)) => format!("База: ¥{c:.2} · ${u:.2}"),
+                (Some(c), None) => format!("База: ¥{c:.2}"),
+                (None, Some(u)) => format!("База: ${u:.2}"),
+                (None, None) => "База появится после первого успешного опроса".to_string(),
+            };
+            ui.label(RichText::new(base_text).size(10.5).color(HINT));
+            ui.label(
+                RichText::new(
+                    "Процент — израсходованная доля этой базы, а не лимит DeepSeek: у API \
+                     расчёт деньгами. При пополнении база поднимается автоматически.",
+                )
+                .size(10.5)
+                .color(HINT),
+            );
+            if ui.button("Пересчитать базу от текущего баланса").clicked()
+            {
+                self.shared
+                    .reset_deepseek_baseline
+                    .store(true, Ordering::Relaxed);
+                self.key_notice = Some((
+                    "Базовая сумма будет пересчитана при следующем опросе.".to_string(),
+                    true,
+                ));
+            }
+
+            let mut pin_ds = self.settings.pinned_family == Some(Family::DeepSeek);
+            if ui
+                .checkbox(&mut pin_ds, "Закрепить DeepSeek на строке")
+                .changed()
+            {
+                self.settings.pinned_family = pin_ds.then_some(Family::DeepSeek);
+                self.settings.save();
+                if pin_ds {
+                    self.active = Family::DeepSeek;
+                }
+            }
+
+            if let Some((msg, ok)) = &self.key_notice {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(msg)
+                        .size(10.5)
+                        .color(if *ok { ACCENT } else { WARN }),
+                );
+            }
+        });
+    }
+
     /// Returns true when "обновить сейчас" was pressed.
     fn polling_card(&mut self, ui: &mut egui::Ui) -> bool {
         let mut refresh = false;
@@ -463,7 +698,7 @@ impl App {
         card(ui, "ВЕРСИЯ", |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(format!("Quotty {}", crate::update::current()))
+                    RichText::new(format!("Quottyall {}", crate::update::current()))
                         .size(12.0)
                         .color(TEXT),
                 );
@@ -659,6 +894,26 @@ fn short(e: &str) -> String {
     s
 }
 
+/// One provider's one-line status, shared by the sources and keys cards.
+fn source_status(
+    enabled: bool,
+    online: bool,
+    ever: bool,
+    err: &Option<String>,
+) -> (String, Color32) {
+    if !enabled {
+        ("выключен".to_string(), HINT)
+    } else if online {
+        ("данные получены".to_string(), ACCENT)
+    } else if let Some(e) = err {
+        (short(e), WARN)
+    } else if ever {
+        ("нет связи".to_string(), WARN)
+    } else {
+        ("опрос…".to_string(), HINT)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Placement
 // ---------------------------------------------------------------------------
@@ -782,7 +1037,7 @@ fn drop_system_chrome(hwnd: windows::Win32::Foundation::HWND) {
 }
 
 /// Our own settings window, by title. `FindWindowW` alone matches on title
-/// across every process, so a second Quotty (a dev build beside the installed
+/// across every process, so a second Quottyall (a dev build beside the installed
 /// one) hands us *its* window — and we then move and re-chrome the wrong one.
 #[cfg(windows)]
 fn own_settings_window() -> Option<isize> {

@@ -32,11 +32,11 @@ mod platform {
     }
 
     fn startup_lnk() -> Option<PathBuf> {
-        startup_dir().map(|d| d.join("Quotty.lnk"))
+        startup_dir().map(|d| d.join("Quottyall.lnk"))
     }
 
     fn desktop_lnk() -> Option<PathBuf> {
-        dirs::desktop_dir().map(|d| d.join("Quotty.lnk"))
+        dirs::desktop_dir().map(|d| d.join("Quottyall.lnk"))
     }
 
     fn make_lnk(target: &PathBuf, dest: &PathBuf) -> Result<(), String> {
@@ -100,11 +100,11 @@ mod platform {
     use super::exe;
 
     fn autostart_entry() -> Option<PathBuf> {
-        dirs::config_dir().map(|c| c.join("autostart").join("Quotty.desktop"))
+        dirs::config_dir().map(|c| c.join("autostart").join("Quottyall.desktop"))
     }
 
     fn desktop_entry() -> Option<PathBuf> {
-        dirs::desktop_dir().map(|d| d.join("Quotty.desktop"))
+        dirs::desktop_dir().map(|d| d.join("Quottyall.desktop"))
     }
 
     /// The entry body. `Exec` is quoted, so a path with spaces still launches.

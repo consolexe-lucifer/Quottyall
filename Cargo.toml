@@ -1,11 +1,14 @@
 [package]
 name = "quotty"
-version = "1.5.1"
+version = "1.0.0"
 edition = "2021"
-description = "Quotty - a movable strip showing the quota and reset timers of the AI tool you are using"
+description = "Quottyall - a movable strip showing the quota and reset timers of the AI tools you use (fork of Quotty)"
 
 [[bin]]
-name = "quotty"
+# Deliberately not `quotty`: an installed original Quotty owns that name, and
+# two programs with the same image name would confuse the installer's
+# close-running-app step and any process-based check.
+name = "quottyall"
 path = "src/main.rs"
 
 [dependencies]

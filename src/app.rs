@@ -234,6 +234,9 @@ pub struct Shared {
     pub update: Mutex<UpdateState>,
     /// Set to run an update check without waiting for the 8-hour timer.
     pub update_now: AtomicBool,
+    /// Set by the settings window to re-anchor the DeepSeek percentage to the
+    /// current balance. Done on the poll thread: it needs a network round-trip.
+    pub reset_deepseek_baseline: AtomicBool,
 }
 
 pub struct App {
@@ -279,6 +282,17 @@ pub struct App {
     /// A drag we started ourselves is in progress; only then is the window's
     /// new position worth persisting.
     dragging: bool,
+    /// Text being typed into the MiniMax key field. Kept in memory only, never
+    /// written to settings; the key itself goes to the DPAPI store.
+    pub(crate) minimax_key_input: String,
+    /// Same for the DeepSeek key field.
+    pub(crate) deepseek_key_input: String,
+    /// Result of the last save/clear, shown under the field that produced it.
+    pub(crate) key_notice: Option<(String, bool)>,
+    /// Cached "····1234" hints, so the settings panel does not decrypt the
+    /// stored keys on every frame.
+    pub(crate) minimax_key_hint: Option<String>,
+    pub(crate) deepseek_key_hint: Option<String>,
 }
 
 /// Pull the Win32 HWND out of eframe's frame (None on other platforms).
@@ -395,6 +409,7 @@ impl App {
             want: AtomicU8::new(NO_FAMILY),
             update: Mutex::new(UpdateState::default()),
             update_now: AtomicBool::new(false),
+            reset_deepseek_baseline: AtomicBool::new(false),
         });
         spawn_poller(shared.clone(), cc.egui_ctx.clone());
         spawn_update_checker(shared.clone(), cc.egui_ctx.clone());
@@ -427,6 +442,11 @@ impl App {
             timer_period: 0,
             tooltip: String::new(),
             dragging: false,
+            minimax_key_input: String::new(),
+            deepseek_key_input: String::new(),
+            key_notice: None,
+            minimax_key_hint: crate::secret::hint(crate::secret::Slot::MINIMAX),
+            deepseek_key_hint: crate::secret::hint(crate::secret::Slot::DEEPSEEK),
         }
     }
 
@@ -468,11 +488,17 @@ impl App {
     /// Follow the foreground window (or the pinned choice) and, on a switch,
     /// ask the poller to refresh that family right away.
     fn update_active(&mut self, t: f64) {
-        let target = match self.settings.active_mode {
-            ActiveMode::Pinned => self.settings.family,
-            ActiveMode::Auto => match self.detector.poll(t) {
-                Some(f) if self.settings.enabled(f) => f,
-                _ => self.active,
+        let target = match self.pinned() {
+            // MiniMax and DeepSeek are not desktop apps the auto mode can
+            // recognise: a pin is how they get on screen, independent of
+            // whatever window is in front.
+            Some(pinned) => pinned,
+            None => match self.settings.active_mode {
+                ActiveMode::Pinned => self.settings.family,
+                ActiveMode::Auto => match self.detector.poll(t) {
+                    Some(f) if self.settings.enabled(f) => f,
+                    _ => self.active,
+                },
             },
         };
         if target == self.active {
@@ -481,15 +507,26 @@ impl App {
         self.active = target;
         self.settings.family = target;
         self.reset_cache.clear();
-        self.shared
-            .want
-            .store(target.idx() as u8, Ordering::Relaxed);
+        // An unrecognised foreground window leaves `target` equal to `active`,
+        // so a line here always means the detector really changed its mind.
+        providers::diag(&format!("active: now showing {:?}", target));
+        // Deliberately no immediate fetch here: switching windows is not a
+        // reason to spend an API request. The poller's own schedule keeps each
+        // enabled family fresh, so the numbers for `target` are already in
+        // `states` and the strip shows them at once.
         // Persisted so the next launch starts on the tool you were using — but
         // not on every alt-tab.
         if t - self.last_family_save > 30.0 {
             self.last_family_save = t;
             self.settings.save();
         }
+    }
+
+    /// The family the user pinned on screen, if it is still enabled.
+    fn pinned(&self) -> Option<Family> {
+        self.settings
+            .pinned_family
+            .filter(|f| self.settings.enabled(*f))
     }
 
     /// Take the strip off the screen while none of the enabled tools is even
@@ -505,8 +542,11 @@ impl App {
         // While the settings window is open the strip stays up whatever is
         // running: that is where the user changes the design and the toggle
         // below, and both would otherwise be invisible.
+        // A pinned family is explicit: there is no local process to wait for,
+        // so the strip must not hide itself.
         let hide = self.settings.hide_when_idle
             && !self.show_settings
+            && self.pinned().is_none()
             && self.detector.running(t) & self.settings.enabled_mask() == 0;
         if hide == self.idle_hidden {
             return;
@@ -674,11 +714,11 @@ impl App {
     fn sync_tooltip(&mut self) {
         let want = match &self.shared.update.lock().unwrap().available {
             Some(u) => format!(
-                "Quotty {} — доступно обновление {}",
+                "Quottyall {} — доступно обновление {}",
                 update::current(),
                 u.version
             ),
-            None => format!("Quotty {}", update::current()),
+            None => format!("Quottyall {}", update::current()),
         };
         if want != self.tooltip {
             if let Some(t) = &self.tray {
@@ -721,6 +761,22 @@ fn spawn_poller(shared: Arc<Shared>, ctx: egui::Context) {
             let interval = shared.interval.load(Ordering::Relaxed).max(5);
             let mut changed = false;
 
+            // Re-anchoring the DeepSeek percentage needs the live balance, so it
+            // happens here rather than on the UI thread (which would freeze for
+            // the length of an HTTP round-trip).
+            if shared
+                .reset_deepseek_baseline
+                .swap(false, Ordering::Relaxed)
+            {
+                match providers::deepseek::reset_baselines() {
+                    Ok(()) => {
+                        providers::diag("deepseek: baseline reset from the settings");
+                        due[Family::DeepSeek.idx()] = std::time::Instant::now();
+                    }
+                    Err(e) => providers::dbg_log(&format!("deepseek: baseline reset: {e}")),
+                }
+            }
+
             for family in Family::ALL {
                 let i = family.idx();
                 if mask & (1 << i) == 0 {
@@ -752,7 +808,21 @@ fn spawn_poller(shared: Arc<Shared>, ctx: egui::Context) {
                 }
                 changed = true;
                 backoff[i] = if ok { 5 } else { (backoff[i] * 2).min(120) };
-                let wait = if ok { interval } else { backoff[i] };
+                // Key-based cloud providers are quoted at a sane floor even
+                // when the user asks for a fast poll: these numbers move by the
+                // minute, and hammering someone else's API is rude.
+                let floor = match family {
+                    Family::MiniMax => 60,
+                    // A money balance moves on the scale of hours: five minutes
+                    // is plenty, and no documented rate limit is worth testing.
+                    Family::DeepSeek => 300,
+                    _ => 0,
+                };
+                let wait = if ok {
+                    interval.max(floor)
+                } else {
+                    backoff[i].max(floor.min(30))
+                };
                 due[i] = std::time::Instant::now() + std::time::Duration::from_secs(wait);
             }
 
